@@ -4,7 +4,7 @@ from .course import Course
 from .section import Section
 from .room import Room
 from .timeslot import TimeSlot
-from .availability import Availability
+from .availability import FacultyAvailability
 from .timetable import Timetable
 
 __all__ = [
@@ -13,6 +13,6 @@ __all__ = [
     "Section",
     "Room",
     "TimeSlot",
-    "Availability",
+    "FacultyAvailability",
     "Timetable",
 ]

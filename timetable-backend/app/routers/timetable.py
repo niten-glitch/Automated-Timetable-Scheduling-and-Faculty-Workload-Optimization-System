@@ -15,11 +15,25 @@ def get_db():
 
 @router.post("/generate")
 def generate(db: Session = Depends(get_db)):
-    return generate_timetable(
+    # Get all data
+    sections = db.query(section.Section).all()
+    courses = db.query(course.Course).all()
+    
+    # Create section_courses mapping
+    section_courses = {}
+    for sec in sections:
+        section_courses[sec.id] = courses
+    
+    result = generate_timetable(
         db,
-        db.query(section.Section).all(),
-        db.query(course.Course).all(),
+        sections,
+        section_courses,
         db.query(faculty.Faculty).all(),
         db.query(room.Room).all(),
         db.query(timeslot.TimeSlot).all()
     )
+    
+    return {"message": "Timetable generated", "entries": len(result), "data": result}
+
+
+## **Quick Fix: Check seed_db.py Output**
