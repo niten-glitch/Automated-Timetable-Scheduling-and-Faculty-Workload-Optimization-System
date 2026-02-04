@@ -196,6 +196,8 @@
             <div class="button-group">
                 <button onclick="generateTimetable()" class="success">🚀 Generate Timetable</button>
                 <button onclick="viewTimetable()">📅 View Timetable</button>
+                <button onclick="detectConflicts()" class="success">🔍 Detect Conflicts</button>
+                <button onclick="viewConflicts()">⚠️ View Conflicts</button>
                 <button onclick="viewData('faculty')">👨‍🏫 View Faculties</button>
                 <button onclick="viewData('course')">📚 View Courses</button>
                 <button onclick="viewData('room')">🏫 View Rooms</button>
@@ -378,9 +380,78 @@
                     <td>${entry.sectionId?.name || 'N/A'}</td>
                     <td>${entry.courseId?.name || 'N/A'} (${entry.courseId?.courseType || 'N/A'})</td>
                     <td>${entry.facultyId?.name || 'N/A'}</td>
-                    <td>${entry.roomId?.name || ('Room ' + entry.roomId?._id?.toString().slice(-4))} (${entry.roomId?.roomType || 'N/A'})</td>
+                    <td>Room ${entry.roomId?._id?.toString().slice(-4) || 'N/A'} (${entry.roomId?.roomType || 'N/A'})</td>
                     <td>${entry.timeslotId?.day || 'N/A'}</td>
                     <td>Slot ${entry.timeslotId?.slot || 'N/A'}</td>
+                </tr>`;
+            });
+
+            html += '</tbody></table></div>';
+            document.getElementById('results').innerHTML = html;
+        }
+
+        async function detectConflicts() {
+            showStatus('Detecting conflicts... ⏳', 'info');
+            document.getElementById('results').innerHTML = '<div class="loading">Detecting conflicts...</div>';
+
+            try {
+                const response = await fetch(`${API_URL}/conflicts/detect`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showStatus(`Conflict detection complete! Found ${data.conflictsFound} conflicts. ✅`, data.conflictsFound > 0 ? 'error' : 'success');
+                    displayJSON(data);
+                } else {
+                    showStatus(`Error: ${data.message}`, 'error');
+                    displayJSON(data);
+                }
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                document.getElementById('results').innerHTML = `<pre>${error.message}</pre>`;
+            }
+        }
+
+        async function viewConflicts() {
+            showStatus('Loading conflicts... ⏳', 'info');
+            document.getElementById('results').innerHTML = '<div class="loading">Loading conflicts...</div>';
+
+            try {
+                const response = await fetch(`${API_URL}/conflicts`);
+                const data = await response.json();
+
+                if (response.ok && data.data && data.data.length > 0) {
+                    showStatus(`Found ${data.count} conflicts. ⚠️`, 'error');
+                    displayConflictsTable(data.data);
+                } else {
+                    showStatus('No conflicts found! ✅', 'success');
+                    document.getElementById('results').innerHTML = '<p style="text-align: center; padding: 40px; color: #28a745; font-size: 1.2em;">✅ No conflicts detected in the current timetable!</p>';
+                }
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                document.getElementById('results').innerHTML = `<pre>${error.message}</pre>`;
+            }
+        }
+
+        function displayConflictsTable(conflicts) {
+            let html = '<div class="timetable-grid"><table>';
+            html += '<thead><tr><th>Type</th><th>Reason</th><th>Entity ID</th><th>Timeslot ID</th></tr></thead>';
+            html += '<tbody>';
+
+            conflicts.forEach(conflict => {
+                const typeColors = {
+                    'faculty': '#ff6b6b',
+                    'room': '#ffa500',
+                    'section': '#ff1493'
+                };
+                const color = typeColors[conflict.type] || '#667eea';
+
+                html += `<tr style="background-color: ${color}15;">
+                    <td><span style="background: ${color}; color: white; padding: 4px 12px; border-radius: 4px; font-weight: 600;">${conflict.type.toUpperCase()}</span></td>
+                    <td style="font-weight: 500;">${conflict.reason}</td>
+                    <td style="font-family: monospace; font-size: 0.9em;">${conflict.entityId?.toString().slice(-8) || 'N/A'}</td>
+                    <td style="font-family: monospace; font-size: 0.9em;">${conflict.timeslotId?.day || 'N/A'} - Slot ${conflict.timeslotId?.slot || 'N/A'}</td>
                 </tr>`;
             });
 

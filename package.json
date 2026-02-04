@@ -1,4 +1,11 @@
 {
+  "name": "timetable-system-root",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "cd timetable-backend-mern && npm start",
+    "seed": "cd timetable-backend-mern && npm run seed",
+    "install-all": "cd timetable-backend-mern && npm install"
+  },
   "dependencies": {
     "mongoose": "^9.1.5"
   }
