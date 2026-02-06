@@ -26,6 +26,11 @@ const timetableSchema = new mongoose.Schema({
         ref: 'TimeSlot',
         required: true,
     },
+    proposalId: {
+        type: Number,
+        required: true,
+        default: 1
+    },
 }, {
     timestamps: true,
 });

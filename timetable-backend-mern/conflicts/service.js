@@ -6,19 +6,23 @@ const Conflict = require('../models/Conflict');
  * Clears existing conflicts first to ensure freshness.
  * Returns an array of detected conflicts.
  */
-const detectConflicts = async () => {
+const detectConflicts = async (proposalId) => {
     // 1. Clear existing conflicts
-    await Conflict.deleteMany({});
+    if (proposalId) {
+        await Conflict.deleteMany({ proposalId });
+    } else {
+        await Conflict.deleteMany({});
+    }
 
     const conflicts = [];
+    const query = proposalId ? { proposalId } : {};
+
     // Fetch all timetable entries
-    const entries = await Timetable.find().populate('facultyId roomId sectionId timeslotId');
+    const entries = await Timetable.find(query).populate('facultyId roomId sectionId timeslotId');
 
     // Simple O(N^2) check or optimized query - relying on optimized query concepts or iteration
     // Since we need specific reasons, iteration is straightforward for this scale.
     // For large datasets, we would aggregate.
-
-
 
     for (let i = 0; i < entries.length; i++) {
         const entryA = entries[i];
@@ -33,6 +37,11 @@ const detectConflicts = async () => {
 
         for (let j = i + 1; j < entries.length; j++) {
             const entryB = entries[j];
+
+            // Ensure we only compare entries within the same proposal
+            if (entryA.proposalId != entryB.proposalId) {
+                continue;
+            }
 
             // Skip entries with missing populated fields or missing _id properties
             if (!entryB.timeslotId || !entryB.timeslotId._id ||
@@ -55,6 +64,7 @@ const detectConflicts = async () => {
                     entityId: entryA.facultyId._id,
                     timeslotId: entryA.timeslotId._id,
                     reason: `Faculty ${entryA.facultyId.name} is double booked in Room ${entryA.roomId.roomType} and ${entryB.roomId.roomType}`,
+                    proposalId: entryA.proposalId,
                     details: {
                         entryA: entryA._id,
                         entryB: entryB._id
@@ -69,6 +79,7 @@ const detectConflicts = async () => {
                     entityId: entryA.roomId._id,
                     timeslotId: entryA.timeslotId._id,
                     reason: `Room ${entryA.roomId.roomType} (Capacity: ${entryA.roomId.capacity}) is double booked for ${entryA.courseId} and ${entryB.courseId}`,
+                    proposalId: entryA.proposalId,
                     details: {
                         entryA: entryA._id,
                         entryB: entryB._id
@@ -83,6 +94,7 @@ const detectConflicts = async () => {
                     entityId: entryA.sectionId._id,
                     timeslotId: entryA.timeslotId._id,
                     reason: `Section ${entryA.sectionId.name} has two classes scheduled at the same time: ${entryA.courseId} and ${entryB.courseId}`,
+                    proposalId: entryA.proposalId,
                     details: {
                         entryA: entryA._id,
                         entryB: entryB._id
@@ -92,8 +104,6 @@ const detectConflicts = async () => {
         }
     }
 
-    // Remove duplicates if any (though the loop pairing prevents A-B and B-A duplicates, double booking A-B-C might produce A-B, A-C, B-C which is correct)
-
     // Save to DB
     if (conflicts.length > 0) {
         // We only save the main schema fields
@@ -101,7 +111,8 @@ const detectConflicts = async () => {
             type: c.type,
             entityId: c.entityId,
             timeslotId: c.timeslotId,
-            reason: c.reason
+            reason: c.reason,
+            proposalId: c.proposalId
         }));
         await Conflict.insertMany(dbConflicts);
     }
@@ -109,12 +120,13 @@ const detectConflicts = async () => {
     return conflicts;
 };
 
-const getConflicts = async () => {
-    return await Conflict.find()
-        .populate('entityId') // This might fail if entityId references dynamic collections (polymorphic). 
-        // Conflict model schema says: entityId: Schema.Types.ObjectId. It doesn't specify 'ref'.
-        // We need to handle population manually or fix the schema if we want auto-pop.
-        // For now, return as is, or rely on client to looking up IDs.
+const getConflicts = async (proposalId) => {
+    const query = {};
+    if (proposalId) {
+        query.proposalId = proposalId;
+    }
+    return await Conflict.find(query)
+        .populate('entityId')
         .populate('timeslotId');
 };
 

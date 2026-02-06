@@ -5,7 +5,8 @@ const conflictService = require('./service');
 // Get all conflicts
 router.get('/', async (req, res) => {
     try {
-        const conflicts = await conflictService.getConflicts();
+        const { proposalId } = req.query;
+        const conflicts = await conflictService.getConflicts(proposalId);
         res.json({
             success: true,
             count: conflicts.length,
@@ -20,7 +21,8 @@ router.get('/', async (req, res) => {
 // Trigger conflict detection manually
 router.post('/detect', async (req, res) => {
     try {
-        const conflicts = await conflictService.detectConflicts();
+        const proposalId = (req.body && req.body.proposalId) || (req.query && req.query.proposalId);
+        const conflicts = await conflictService.detectConflicts(proposalId);
         res.json({
             success: true,
             message: 'Conflict detection run successfully',

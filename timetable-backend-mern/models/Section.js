@@ -9,6 +9,14 @@ const sectionSchema = new mongoose.Schema({
         type: Number,
         required: true,
     },
+    program: {
+        type: String,
+        required: false, // Optional for backward compatibility
+    },
+    batch: {
+        type: String,
+        required: false, // Optional for backward compatibility
+    },
 }, {
     timestamps: true,
 });

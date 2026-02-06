@@ -25,7 +25,7 @@ router.post('/generate', async (req, res) => {
             sectionCourses[section._id.toString()] = courses;
         }
 
-        const result = await generateTimetable(
+        const { bestSchedule, rankings } = await generateTimetable(
             sections,
             sectionCourses,
             faculties,
@@ -35,8 +35,9 @@ router.post('/generate', async (req, res) => {
 
         res.json({
             message: 'Timetable generated successfully',
-            entries: result.length,
-            data: result,
+            entries: bestSchedule.length,
+            data: bestSchedule,
+            rankings: rankings
         });
     } catch (error) {
         res.status(500).json({
@@ -46,10 +47,61 @@ router.post('/generate', async (req, res) => {
     }
 });
 
-// Get all timetable entries
+// Get available timetable versions/candidates
+router.get('/versions', async (req, res) => {
+    try {
+        const versions = await Timetable.aggregate([
+            {
+                $group: {
+                    _id: "$proposalId",
+                    score: { $max: "$score" },
+                    entryCount: { $sum: 1 },
+                    updatedAt: { $max: "$updatedAt" }
+                }
+            },
+            { $sort: { score: -1 } }
+        ]);
+
+        res.json({
+            message: 'Versions retrieved successfully',
+            data: versions.map((v, index) => ({
+                rank: index + 1,
+                id: v._id || 1, // Default to 1 if missing
+                score: v.score,
+                entryCount: v.entryCount,
+                updatedAt: v.updatedAt
+            }))
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: 'Error retrieving versions',
+            error: error.message,
+        });
+    }
+});
+
+// Get timetable entries with optional filtering by proposalId
 router.get('/', async (req, res) => {
     try {
-        const timetable = await Timetable.find()
+        const query = {};
+        if (req.query.proposalId) {
+            query.proposalId = req.query.proposalId;
+        } else {
+            // If no specific ID requested, we might want to default to the "best" one?
+            // Or just return everything? Returning everything mixes schedules which is bad for UI.
+            // Let's find the proposal with the highest score (or just one of them) if not specified?
+            // Or better: Default to the first one found?
+            // Let's implement this: if no ID, try to find the "best" (highest score) one dynamically, or just return all and let frontend filter.
+            // Given the existing frontend likely expects just one schedule, sending mixed is risky.
+            // Let's try to find the one with the highest calculated score from the DB?
+            // Too complex for a simple query.
+            // Let's just return ALL for now to avoid breaking legacy if they rely on it, 
+            // BUT checking the frontend code would be wise. 
+            // User said "view tables and other services with a dropdown". 
+            // So I will make the frontend request with `?proposalId=...`.
+        }
+
+        const timetable = await Timetable.find(query)
             .populate('sectionId')
             .populate('courseId')
             .populate('facultyId')
@@ -109,9 +161,11 @@ router.delete('/', async (req, res) => {
 });
 
 // Detect conflicts
-router.get('/conflicts/detect', async (req, res) => {
+// Supports ?proposalId=...
+router.post('/conflicts/detect', async (req, res) => {
     try {
-        const conflicts = await detectConflicts();
+        const proposalId = req.query.proposalId || req.body.proposalId;
+        const conflicts = await detectConflicts(proposalId);
         res.json({
             message: 'Conflict detection completed',
             count: conflicts.length,

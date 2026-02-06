@@ -204,6 +204,14 @@
                 <button onclick="viewData('section')">👥 View Sections</button>
                 <button onclick="viewData('timeslot')">⏰ View Timeslots</button>
                 <button onclick="clearTimetable()" class="secondary">🗑️ Clear Timetable</button>
+
+                <div id="versionControl"
+                    style="display:none; margin-left: auto; align-items: center; background: #f8f9fa; padding: 5px 15px; border-radius: 8px; border: 1px solid #ddd;">
+                    <label style="margin-right: 10px; font-weight: 600; color: #667eea;">Select Plan:</label>
+                    <select id="versionSelect" onchange="onVersionChange(this.value)"
+                        style="padding: 5px 10px; border-radius: 4px; border: 1px solid #ccc; outline: none;">
+                    </select>
+                </div>
             </div>
         </div>
 
@@ -289,6 +297,11 @@
                     showStatus(`Timetable generated successfully! ${data.entries} classes scheduled. ✅`, 'success');
                     displayJSON(data);
                     await loadStats();
+                    if (data.rankings) {
+                        updateVersionDropdown(data.rankings);
+                        // Automatically view the best one
+                        if (data.rankings.length > 0) viewTimetable(data.rankings[0].id);
+                    }
                 } else {
                     showStatus(`Error: ${data.message}`, 'error');
                     displayJSON(data);
@@ -299,20 +312,50 @@
             }
         }
 
-        async function viewTimetable() {
+        async function viewTimetable(proposalId = null) {
+            currentView = 'timetable'; // Set active view state
+
+            // Use selected ID if not provided
+            if (!proposalId) {
+                const select = document.getElementById('versionSelect');
+                if (select && select.value) proposalId = select.value;
+            }
+
+            // If still no ID (e.g. no generated data), warn user
+            if (!proposalId) {
+                // Try to fetch versions to populate dropdown if empty
+                await loadVersions();
+                const select = document.getElementById('versionSelect');
+                if (select && select.value) proposalId = select.value;
+
+                if (!proposalId) {
+                    showStatus('No generated timetables found. Please generate one first.', 'info');
+                    return;
+                }
+            }
+
+            // Sync dropdown if called programmatically
+            const select = document.getElementById('versionSelect');
+            if (select && select.value !== proposalId) {
+                select.value = proposalId;
+            }
+
             showStatus('Loading timetable... ⏳', 'info');
             document.getElementById('results').innerHTML = '<div class="loading">Loading timetable...</div>';
 
             try {
-                const response = await fetch(`${API_URL}/timetable`);
+                let url = `${API_URL}/timetable`;
+                if (proposalId) url += `?proposalId=${proposalId}`;
+
+                const response = await fetch(url);
                 const data = await response.json();
 
                 if (response.ok && data.data && data.data.length > 0) {
-                    showStatus(`Loaded ${data.count} timetable entries. ✅`, 'success');
+                    showStatus(`Loaded ${data.count} timetable entries (Plan ID: ${proposalId}). ✅`, 'success');
                     displayTimetableTable(data.data);
                 } else {
-                    showStatus('No timetable entries found. Generate a timetable first.', 'info');
-                    document.getElementById('results').innerHTML = '<p>No timetable entries found.</p>';
+                    showStatus('No timetable entries found for this plan.', 'info');
+                    document.getElementById('results').innerHTML = '<p>No entries found.</p>';
                 }
             } catch (error) {
                 showStatus(`Error: ${error.message}`, 'error');
@@ -321,6 +364,7 @@
         }
 
         async function viewData(type) {
+            currentView = 'data'; // Disable dropdown automations
             showStatus(`Loading ${type} data... ⏳`, 'info');
             document.getElementById('results').innerHTML = '<div class="loading">Loading data...</div>';
 
@@ -380,7 +424,7 @@
                     <td>${entry.sectionId?.name || 'N/A'}</td>
                     <td>${entry.courseId?.name || 'N/A'} (${entry.courseId?.courseType || 'N/A'})</td>
                     <td>${entry.facultyId?.name || 'N/A'}</td>
-                    <td>Room ${entry.roomId?._id?.toString().slice(-4) || 'N/A'} (${entry.roomId?.roomType || 'N/A'})</td>
+                    <td>${entry.roomId?.name || ('Room ' + entry.roomId?._id?.toString().slice(-4))} (${entry.roomId?.roomType || 'N/A'})</td>
                     <td>${entry.timeslotId?.day || 'N/A'}</td>
                     <td>Slot ${entry.timeslotId?.slot || 'N/A'}</td>
                 </tr>`;
@@ -390,49 +434,7 @@
             document.getElementById('results').innerHTML = html;
         }
 
-        async function detectConflicts() {
-            showStatus('Detecting conflicts... ⏳', 'info');
-            document.getElementById('results').innerHTML = '<div class="loading">Detecting conflicts...</div>';
 
-            try {
-                const response = await fetch(`${API_URL}/conflicts/detect`, {
-                    method: 'POST'
-                });
-                const data = await response.json();
-
-                if (response.ok) {
-                    showStatus(`Conflict detection complete! Found ${data.conflictsFound} conflicts. ✅`, data.conflictsFound > 0 ? 'error' : 'success');
-                    displayJSON(data);
-                } else {
-                    showStatus(`Error: ${data.message}`, 'error');
-                    displayJSON(data);
-                }
-            } catch (error) {
-                showStatus(`Error: ${error.message}`, 'error');
-                document.getElementById('results').innerHTML = `<pre>${error.message}</pre>`;
-            }
-        }
-
-        async function viewConflicts() {
-            showStatus('Loading conflicts... ⏳', 'info');
-            document.getElementById('results').innerHTML = '<div class="loading">Loading conflicts...</div>';
-
-            try {
-                const response = await fetch(`${API_URL}/conflicts`);
-                const data = await response.json();
-
-                if (response.ok && data.data && data.data.length > 0) {
-                    showStatus(`Found ${data.count} conflicts. ⚠️`, 'error');
-                    displayConflictsTable(data.data);
-                } else {
-                    showStatus('No conflicts found! ✅', 'success');
-                    document.getElementById('results').innerHTML = '<p style="text-align: center; padding: 40px; color: #28a745; font-size: 1.2em;">✅ No conflicts detected in the current timetable!</p>';
-                }
-            } catch (error) {
-                showStatus(`Error: ${error.message}`, 'error');
-                document.getElementById('results').innerHTML = `<pre>${error.message}</pre>`;
-            }
-        }
 
         function displayConflictsTable(conflicts) {
             let html = '<div class="timetable-grid"><table>';
@@ -461,6 +463,113 @@
 
         // Check server status on load
         checkServerStatus();
+        loadVersions(); // Check if there are existing versions on load
+
+        async function loadVersions() {
+            try {
+                const response = await fetch(`${API_URL}/timetable/versions`);
+                if (response.ok) {
+                    const data = await response.json();
+                    updateVersionDropdown(data.data);
+                }
+            } catch (e) { console.error(e); }
+        }
+
+        function updateVersionDropdown(versions) {
+            const select = document.getElementById('versionSelect');
+            const container = document.getElementById('versionControl');
+
+            if (!versions || versions.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            container.style.display = 'flex';
+            const currentVal = select.value;
+            select.innerHTML = versions.map(v =>
+                `<option value="${v.id}">Rank ${v.rank} (Score: ${Math.round(v.score)})</option>`
+            ).join('');
+
+            // Restore selection or default to first
+            if (currentVal && versions.some(v => v.id == currentVal)) {
+                select.value = currentVal;
+            } else if (versions.length > 0) {
+                select.value = versions[0].id;
+            }
+        }
+
+        let currentView = 'home';
+
+        async function onVersionChange(id) {
+            if (currentView === 'timetable') {
+                await viewTimetable(id);
+            } else if (currentView === 'conflicts') {
+                await detectConflicts(id); // Dynamically re-detect for the new ID
+            }
+        }
+
+        // ... update detectConflicts ...
+        async function detectConflicts(proposalId = null) {
+            currentView = 'conflicts';
+            // Use selected ID if not provided
+            if (!proposalId) {
+                const select = document.getElementById('versionSelect');
+                if (select && select.value) proposalId = select.value;
+            }
+
+            // If still no ID, try to default or warn
+            if (!proposalId) {
+                // If we have no ID, it implies no versions loaded or selected.
+                // We should probably rely on the backend default or warn.
+                // But better to fetch versions first if possible.
+                await loadVersions();
+                const select = document.getElementById('versionSelect');
+                if (select && select.value) proposalId = select.value;
+            }
+
+            // Sync dropdown
+            const select = document.getElementById('versionSelect');
+            if (select && select.value !== proposalId && proposalId) {
+                select.value = proposalId;
+            }
+
+            showStatus('Detecting conflicts... ⏳', 'info');
+            document.getElementById('results').innerHTML = '<div class="loading">Detecting conflicts...</div>';
+
+            try {
+                let url = `${API_URL}/conflicts/detect`;
+                if (proposalId) url += `?proposalId=${proposalId}`;
+
+                const response = await fetch(url, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showStatus(`Conflict detection complete for Plan ${proposalId || 'All'}! Found ${data.count} conflicts. ✅`, data.count > 0 ? 'error' : 'success');
+                    if (data.data && data.data.length > 0) {
+                        displayConflictsTable(data.data);
+                    } else {
+                        document.getElementById('results').innerHTML = '<p style="text-align: center; padding: 40px; color: #28a745; font-size: 1.2em;">✅ No conflicts detected in this timetable version!</p>';
+                    }
+                } else {
+                    showStatus(`Error: ${data.message}`, 'error');
+                    displayJSON(data);
+                }
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                document.getElementById('results').innerHTML = `<pre>${error.message}</pre>`;
+            }
+        }
+
+        async function viewConflicts() {
+            // For now, redirect to detect to ensure fresh data for the selected ID
+            // Or separate view?
+            // Since "View Conflicts" usually implies reading stored ones, 
+            // but our stored ones might be mixed if we don't filter.
+            // Let's just alias it to detectConflicts(currentId) for dynamic behavior requested.
+            detectConflicts();
+        }
     </script>
 </body>
 

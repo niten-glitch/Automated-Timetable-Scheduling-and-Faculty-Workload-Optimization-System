@@ -19,6 +19,10 @@ const conflictSchema = new mongoose.Schema({
         type: String,
         required: true,
     },
+    proposalId: {
+        type: Number,
+        required: false
+    }
 }, {
     timestamps: true,
 });
