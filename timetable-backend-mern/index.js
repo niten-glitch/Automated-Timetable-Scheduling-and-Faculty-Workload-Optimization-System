@@ -22,6 +22,7 @@ app.use('/api/timeslot', require('./routes/timeslot'));
 app.use('/api/availability', require('./routes/availability'));
 app.use('/api/timetable', require('./routes/timetable'));
 app.use('/api/conflicts', require('./conflicts'));
+app.use('/api/rescheduling', require('./routes/rescheduling'));
 
 // Health check
 app.get('/', (req, res) => {

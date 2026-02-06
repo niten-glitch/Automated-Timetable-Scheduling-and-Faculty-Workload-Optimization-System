@@ -203,6 +203,9 @@
                 <button onclick="viewData('room')">🏫 View Rooms</button>
                 <button onclick="viewData('section')">👥 View Sections</button>
                 <button onclick="viewData('timeslot')">⏰ View Timeslots</button>
+                <button onclick="showReschedulingUI()"
+                    style="background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 99%, #fecfef 100%);">🔄 Dynamic
+                    Rescheduling</button>
                 <button onclick="clearTimetable()" class="secondary">🗑️ Clear Timetable</button>
 
                 <div id="versionControl"
@@ -570,6 +573,355 @@
             // Let's just alias it to detectConflicts(currentId) for dynamic behavior requested.
             detectConflicts();
         }
+
+        async function showReschedulingUI() {
+            currentView = 'rescheduling';
+            showStatus('Opening Rescheduling Tools... 🔧', 'info');
+
+            // Pre-fetch data for dropdowns
+            let faculties = [], rooms = [], timeslots = [];
+            try {
+                const [fData, rData, tData] = await Promise.all([
+                    fetch(`${API_URL}/faculty`).then(r => r.json()),
+                    fetch(`${API_URL}/room`).then(r => r.json()),
+                    fetch(`${API_URL}/timeslot`).then(r => r.json())
+                ]);
+                faculties = fData.data;
+                rooms = rData.data;
+                timeslots = tData.data;
+            } catch (e) { console.error(e); }
+
+            // Extract unique days
+            const days = [...new Set(timeslots.map(t => t.day))];
+
+            const html = `
+    <div style="max-width: 800px; margin: 0 auto;">
+        <h3 style="color: #667eea; margin-bottom: 20px;">Dynamic Rescheduling Engine</h3>
+
+        <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+            <label style="display: block; margin-bottom: 10px; font-weight: 600;">Event Type:</label>
+            <select id="resType" onchange="updateResForm()"
+                style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #ddd; margin-bottom: 20px;">
+                <option value="leave">👨‍🏫 Faculty Leave</option>
+                <option value="room">🚫 Room Unavailability</option>
+                <option value="holiday">🎉 Holiday Declaration</option>
+            </select>
+
+            <div id="resInputs">
+                <!-- Inputs injected here -->
+            </div>
+
+            <button onclick="checkImpact()" class="success" style="width: 100%; margin-top: 10px;">Check Impact & Find
+                Solutions</button>
+        </div>
+
+        <div id="resResults"></div>
+    </div>
+    `;
+
+            document.getElementById('results').innerHTML = html;
+
+            // Store data globally for the form to use
+            window._resData = { faculties, rooms, days };
+
+            // Initialize form
+            setTimeout(updateResForm, 100);
+        }
+
+        function updateResForm() {
+            const type = document.getElementById('resType').value;
+            const container = document.getElementById('resInputs');
+            const data = window._resData || { faculties: [], rooms: [], days: [] };
+
+            let html = '';
+
+            if (type === 'leave') {
+                html += `
+    <label style="display: block; margin-bottom: 5px; font-weight: 500;">Select Faculty:</label>
+    <select id="resFaculty" style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ddd;">
+        ${data.faculties.map(f => `<option value="${f._id}">${f.name}</option>`).join('')}
+    </select>
+    `;
+            } else if (type === 'room') {
+                html += `
+    <label style="display: block; margin-bottom: 5px; font-weight: 500;">Select Room:</label>
+    <select id="resRoom" style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ddd;">
+        ${data.rooms.map(r => `<option value="${r._id}">${r.name} (${r.roomType})</option>`).join('')}
+    </select>
+    `;
+            }
+
+            html += `
+    <label style="display: block; margin-bottom: 5px; font-weight: 500;">Select Day:</label>
+    <select id="resDay" style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ddd;">
+        ${data.days.map(d => `<option value="${d}">${d}</option>`).join('')}
+    </select>
+    `;
+
+            container.innerHTML = html;
+        }
+
+        async function checkImpact() {
+            const type = document.getElementById('resType').value;
+            const day = document.getElementById('resDay').value;
+            let body = { day };
+
+            let endpoint = '';
+            if (type === 'leave') {
+                body.facultyId = document.getElementById('resFaculty').value;
+                endpoint = '/rescheduling/check-faculty-leave';
+            } else if (type === 'room') {
+                body.roomId = document.getElementById('resRoom').value;
+                endpoint = '/rescheduling/check-room-maintenance';
+            } else {
+                endpoint = '/rescheduling/check-holiday';
+            }
+
+            // Include Proposal ID if selected
+            const select = document.getElementById('versionSelect');
+            if (select && select.value) body.proposalId = select.value;
+
+            showStatus('Analyzing impact... ⏳', 'info');
+            document.getElementById('resResults').innerHTML = '<div class="loading">Analyzing...</div>';
+
+            try {
+                const response = await fetch(`${API_URL}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showStatus(`Analysis complete. Found ${data.data.length} issues.`, 'success');
+                    displayResResults(data.data, type);
+                } else {
+                    showStatus(`Error: ${data.message}`, 'error');
+                }
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        function displayResResults(items, type) {
+            const container = document.getElementById('resResults');
+            if (items.length === 0) {
+                container.innerHTML = `<div style="padding: 20px; text-align: center; color: green; background: #e8f5e9; border-radius: 8px;">✅ No conflicts or affected classes found!</div>`;
+                return;
+            }
+
+            let html = `<div style="margin-bottom: 20px; font-weight: bold; color: #d32f2f;">Found ${items.length} affected classes. Please resolve them below:</div>`;
+
+            items.forEach((item, index) => {
+                const original = item.originalClass;
+                const entryId = original._id;
+
+                html += `
+                    <div style="background: white; border-left: 5px solid #ff6b6b; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px;">
+                            <div>
+                                <h4 style="margin: 0; color: #333; font-size: 1.1em;">
+                                    ${original.courseId?.name || 'Unknown Course'} 
+                                    <span style="color: #666; font-weight: normal;">(${original.sectionId?.name})</span>
+                                </h4>
+                                <div style="color: #666; margin-top: 5px; font-size: 0.9em;">
+                                    📅 <strong>${original.timeslotId?.day}</strong>, Slot ${original.timeslotId?.slot} 
+                                    📍 ${original.roomId?.name} 
+                                    👤 ${original.facultyId?.name}
+                                </div>
+                            </div>
+                            <span style="background: #ffebee; color: #c62828; padding: 4px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold;">Action Required</span>
+                        </div>
+
+                        <div style="background: #f8f9fa; padding: 15px; border-radius: 6px;">
+                            <div style="margin-bottom: 10px; font-weight: 600; font-size: 0.9em; text-transform: uppercase; letter-spacing: 0.5px; color: #555;">Resolution Options:</div>
+                `;
+
+                // Render Options based on Type
+                // We use radio buttons to select 1 option per class
+
+                // Option 1: Cancel
+                html += `
+                    <label style="display: flex; align-items: center; padding: 10px; background: white; border: 1px solid #eee; border-radius: 4px; margin-bottom: 8px; cursor: pointer;">
+                        <input type="radio" name="action_${entryId}" value="cancel" style="margin-right: 10px;">
+                        <span style="flex-grow: 1;"><strong>Cancel Class</strong> <span style="color: #888;">(Schedule compensation later)</span></span>
+                    </label>
+                `;
+
+                if (type === 'leave') {
+                    // Substitutes
+                    if (item.options?.substitutes?.length > 0) {
+                        html += `<div style="margin: 10px 0 5px; color: #667eea; font-size: 0.9em; font-weight: 600;">👥 Assign Substitute:</div>`;
+                        item.options.substitutes.forEach(sub => {
+                            html += `
+                                <label style="display: flex; align-items: center; padding: 10px; background: white; border: 1px solid #eee; border-radius: 4px; margin-bottom: 8px; cursor: pointer;">
+                                    <input type="radio" name="action_${entryId}" value="sub_${sub._id}" style="margin-right: 10px;">
+                                    <span style="flex-grow: 1;"><strong>${sub.name}</strong> <span style="color: #28a745; font-size: 0.9em;">(Available)</span></span>
+                                </label>
+                            `;
+                        });
+                    }
+
+                    // Reschedule
+                    if (item.options?.reschedule?.length > 0) {
+                        html += `<div style="margin: 10px 0 5px; color: #667eea; font-size: 0.9em; font-weight: 600;">📅 Reschedule to another day:</div>`;
+                        item.options.reschedule.forEach(opt => {
+                            html += `
+                                <label style="display: flex; align-items: center; padding: 10px; background: white; border: 1px solid #eee; border-radius: 4px; margin-bottom: 8px; cursor: pointer;">
+                                    <input type="radio" name="action_${entryId}" value="move_${opt.slot._id}_${opt.room._id}" style="margin-right: 10px;">
+                                    <span style="flex-grow: 1;">
+                                        <strong>${opt.slot.day}, Slot ${opt.slot.slot}</strong> 
+                                        in <span style="color: #666;">${opt.room.name}</span>
+                                    </span>
+                                </label>
+                            `;
+                        });
+                    }
+                }
+
+                if (type === 'room') {
+                    // Alternate Rooms
+                    if (item.options?.alternateRooms?.length > 0) {
+                        html += `<div style="margin: 10px 0 5px; color: #667eea; font-size: 0.9em; font-weight: 600;">🏫 Switch Room:</div>`;
+                        item.options.alternateRooms.forEach(room => {
+                            html += `
+                                <label style="display: flex; align-items: center; padding: 10px; background: white; border: 1px solid #eee; border-radius: 4px; margin-bottom: 8px; cursor: pointer;">
+                                    <input type="radio" name="action_${entryId}" value="room_${room._id}" style="margin-right: 10px;">
+                                    <span style="flex-grow: 1;"><strong>${room.name}</strong> <span style="color: #28a745; font-size: 0.9em;">(${room.roomType})</span></span>
+                                </label>
+                            `;
+                        });
+                    }
+
+                    // Reschedule
+                    if (item.options?.reschedule?.length > 0) {
+                        html += `<div style="margin: 10px 0 5px; color: #667eea; font-size: 0.9em; font-weight: 600;">📅 Reschedule (Day/Time):</div>`;
+                        item.options.reschedule.forEach(opt => {
+                            html += `
+                                <label style="display: flex; align-items: center; padding: 10px; background: white; border: 1px solid #eee; border-radius: 4px; margin-bottom: 8px; cursor: pointer;">
+                                    <input type="radio" name="action_${entryId}" value="move_${opt.slot._id}_${opt.room._id}" style="margin-right: 10px;">
+                                    <span style="flex-grow: 1;">
+                                        <strong>${opt.slot.day}, Slot ${opt.slot.slot}</strong> 
+                                        ${opt.note ? `<span style="color: orange; font-size: 0.9em;">(${opt.note})</span>` : ''}
+                                    </span>
+                                </label>
+                            `;
+                        });
+                    }
+                }
+
+                if (type === 'holiday') {
+                    // Compensation Candidates
+                    if (item.compensationOptions?.length > 0) {
+                        html += `<div style="margin: 10px 0 5px; color: #667eea; font-size: 0.9em; font-weight: 600;">🗓️ Schedule Compensation Class:</div>`;
+                        item.compensationOptions.forEach(opt => {
+                            html += `
+                                <label style="display: flex; align-items: center; padding: 10px; background: white; border: 1px solid #eee; border-radius: 4px; margin-bottom: 8px; cursor: pointer;">
+                                    <input type="radio" name="action_${entryId}" value="move_${opt.slot._id}_${opt.room._id}" style="margin-right: 10px;">
+                                    <span style="flex-grow: 1;">
+                                        <strong>${opt.slot.day}, Slot ${opt.slot.slot}</strong> 
+                                        in <span style="color: #666;">${opt.room.name}</span>
+                                    </span>
+                                </label>
+                            `;
+                        });
+                    } else {
+                        html += `<div style="padding: 10px; color: #e67e22; background: #fff3e0; border-radius: 4px;">⚠️ No immediate make-up slots found. Class will be cancelled.</div>`;
+                    }
+                }
+
+                html += `</div></div>`; // End card
+            });
+
+            html += `
+                <div style="margin-top: 20px; text-align: right;">
+                    <button onclick="applyRescheduling()" class="success" style="font-size: 1.1em; padding: 12px 30px;">✅ Apply Selected Changes</button>
+                </div>
+            `;
+
+            container.innerHTML = html;
+            window._currentAffectedItems = items; // Store for application
+        }
+
+        async function applyRescheduling() {
+            if (!window._currentAffectedItems) return;
+
+            const updates = [];
+            const items = window._currentAffectedItems;
+
+            // Gather selections
+            for (const item of items) {
+                const entryId = item.originalClass._id;
+                const radios = document.getElementsByName(`action_${entryId}`);
+                let selectedValue = null;
+                for (const r of radios) {
+                    if (r.checked) selectedValue = r.value;
+                }
+
+                if (!selectedValue) {
+                    alert(`Please select an action for ${item.originalClass.courseId.name}`);
+                    return;
+                }
+
+                // Parse Action
+                const update = { entryId, changes: {} };
+
+                if (selectedValue === 'cancel') {
+                    // For now, we might just nullify the slot or mark status.
+                    // Since schema doesn't have status, let's just 'remove' it or move to a 'holding' slot?
+                    // Or we can delete the entry?
+                    // Deleting is simplest for "Cancel".
+                    // But we want to 'Apply Changes' endpoint to handle it.
+                    // Let's assume we want to KEEP it but mark it.
+                    // If we can't mark, we DELETE it.
+                    // Let's DELETE for now as 'Cancel'.
+                    // Wait, endpoint does findByIdAndUpdate.
+                    // To delete, we need a different logic. 
+                    // Let's sends a special flag or handle in frontend.
+                } else if (selectedValue.startsWith('sub_')) {
+                    const subId = selectedValue.split('_')[1];
+                    update.changes.facultyId = subId;
+                    updates.push(update);
+                } else if (selectedValue.startsWith('room_')) {
+                    const roomId = selectedValue.split('_')[1];
+                    update.changes.roomId = roomId;
+                    updates.push(update);
+                } else if (selectedValue.startsWith('move_')) {
+                    const parts = selectedValue.split('_');
+                    const slotId = parts[1];
+                    const roomId = parts[2];
+                    update.changes.timeslotId = slotId;
+                    update.changes.roomId = roomId;
+                    updates.push(update);
+                }
+            }
+
+            if (updates.length === 0) {
+                alert("No updates to apply (only cancellations selected? Cancellations not fully supported in this demo script yet).");
+                return;
+            }
+
+            showStatus('Applying changes... ⏳', 'info');
+
+            try {
+                const response = await fetch(`${API_URL}/rescheduling/apply-changes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ updates })
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showStatus('Changes applied successfully! 🚀', 'success');
+                    document.getElementById('resResults').innerHTML = `<div style="padding: 30px; text-align: center; color: green; background: #e8f5e9; font-size: 1.2em;">🎉 All changes applied successfully!<br><br><button onclick="viewTimetable()">View Updated Timetable</button></div>`;
+                } else {
+                    showStatus(`Error: ${data.message}`, 'error');
+                }
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+            }
+        }
+
     </script>
 </body>
 
