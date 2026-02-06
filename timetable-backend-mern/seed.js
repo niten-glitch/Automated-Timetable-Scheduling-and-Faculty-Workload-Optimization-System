@@ -158,13 +158,37 @@ const seedDatabase = async () => {
         // ---------------------------------------------------------
         // 5. TimeSlots
         // ---------------------------------------------------------
-        // Create 5 days x 8 slots
+        // ---------------------------------------------------------
+        // 5. TimeSlots
+        // ---------------------------------------------------------
         const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
-        const slots = [1, 2, 3, 4, 5, 6, 7, 8];
+
+        // Define the specific time mappings
+        const slotDefinitions = [
+            { slot: 1, start: '8:00 AM', end: '8:50 AM' },
+            { slot: 2, start: '8:50 AM', end: '9:40 AM' },
+            { slot: 3, start: '9:40 AM', end: '10:30 AM' },
+            // Break 10:30-10:45
+            { slot: 4, start: '10:45 AM', end: '11:35 AM' },
+            { slot: 5, start: '11:35 AM', end: '12:25 PM' },
+            { slot: 6, start: '12:25 PM', end: '1:15 PM' },
+            // Lunch 1:15-2:05
+            { slot: 7, start: '2:05 PM', end: '2:55 PM' },
+            { slot: 8, start: '2:55 PM', end: '3:45 PM' },
+            { slot: 9, start: '3:45 PM', end: '4:35 PM' },
+            { slot: 10, start: '4:35 PM', end: '5:25 PM' },
+            { slot: 11, start: '5:25 PM', end: '6:15 PM' }
+        ];
+
         const timeslotList = [];
         for (const day of days) {
-            for (const slot of slots) {
-                timeslotList.push({ day, slot });
+            for (const def of slotDefinitions) {
+                timeslotList.push({
+                    day,
+                    slot: def.slot,
+                    startTime: def.start,
+                    endTime: def.end
+                });
             }
         }
         const createdTimeslots = await TimeSlot.insertMany(timeslotList);

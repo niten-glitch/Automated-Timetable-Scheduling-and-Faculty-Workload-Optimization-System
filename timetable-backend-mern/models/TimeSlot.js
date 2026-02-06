@@ -9,6 +9,14 @@ const timeSlotSchema = new mongoose.Schema({
         type: Number,
         required: true,
     },
+    startTime: {
+        type: String,
+        required: false
+    },
+    endTime: {
+        type: String,
+        required: false
+    }
 }, {
     timestamps: true,
 });

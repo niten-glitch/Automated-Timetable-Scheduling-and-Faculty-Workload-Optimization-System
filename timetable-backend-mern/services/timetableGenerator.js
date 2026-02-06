@@ -20,23 +20,42 @@ const hasClashInMemory = (schedule, field, value, timeslotId) => {
 
 // ---------- SCORING SYSTEM ----------
 
-const calculateScore = (schedule, faculties, sections, rooms) => {
-    let score = 1000; // Base score
-    const details = {
-        base: 1000,
-        workloadPenalty: 0,
-        roomEfficiencyBonus: 0,
-        slotDistributionPenalty: 0
+const calculateScore = (schedule, faculties, sections, rooms, timeslots) => {
+    // WEIGHTS CONFIGURATION
+    const W = {
+        WORKLOAD: 0.30,
+        GAPS: 0.25,
+        ROOM_UTIL: 0.20,
+        COMPACTNESS: 0.15,
+        PREFERENCES: 0.10
     };
 
-    // 1. Workload Balance (Standard Deviation)
+    let score = 1000; // Base score to prevent negative totals
+
+    // Normalization Factors (Approximate max values for scaling to ~0-100 range)
+    // These ensure that 0.3 * Workload is comparable to 0.2 * RoomUtil
+    const SCALING = {
+        WORKLOAD_PENALTY_MULTIPLIER: 20, // If StdDev is 2, Penalty is 40. 0.3 * 40 = 12 pts lost.
+        GAP_PENALTY_MULTIPLIER: 5,       // 5 pts per gap. 10 gaps = 50. 0.25 * 50 = 12.5 pts lost.
+        ROOM_BONUS_MULTIPLIER: 100,      // Util 0.8 * 100 = 80. 0.2 * 80 = 16 pts gained.
+        COMPACTNESS_BONUS_MULTIPLIER: 5, // 5 pts per consecutive pair.
+        DAILY_LOAD_PENALTY: 10           // 10 pts per overloaded day
+    };
+
+    const details = {
+        base: score,
+        workloadScore: 0,
+        gapScore: 0,
+        roomUtilScore: 0,
+        compactnessScore: 0,
+        preferenceScore: 0 // Placeholder
+    };
+
+    // --- 1. WORKLOAD BALANCE (Std Dev) ---
     const facultyLoad = {};
     faculties.forEach(f => facultyLoad[f._id] = 0);
-
-    schedule.forEach(entry => {
-        if (facultyLoad[entry.facultyId] !== undefined) {
-            facultyLoad[entry.facultyId]++;
-        }
+    schedule.forEach(e => {
+        if (facultyLoad[e.facultyId] !== undefined) facultyLoad[e.facultyId]++;
     });
 
     const loads = Object.values(facultyLoad);
@@ -44,30 +63,109 @@ const calculateScore = (schedule, faculties, sections, rooms) => {
     const variance = loads.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (loads.length || 1);
     const stdDev = Math.sqrt(variance);
 
-    // Penalty: High variance is bad.
-    const workloadPenalty = stdDev * 20;
-    score -= workloadPenalty;
-    details.workloadPenalty = -workloadPenalty;
+    // Lower variance is better. We subtract penalty.
+    const rawWorkloadPenalty = stdDev * SCALING.WORKLOAD_PENALTY_MULTIPLIER;
+    const weightedWorkloadPenalty = rawWorkloadPenalty * W.WORKLOAD;
 
-    // 2. Room Efficiency
+    score -= weightedWorkloadPenalty;
+    details.workloadScore = -weightedWorkloadPenalty;
+
+    // --- PREPARE DATA FOR GAPS & COMPACTNESS ---
+    // Helper: Map timeslot ID to temporal value (assuming timeslots have 'day' and 'startTime' or sorted index)
+    // We already passed 'timeslots' array. Let's map ID -> { day, slotIndex }
+    // Assuming 'timeslots' is array of objects { _id, day, startTime, endTime, slot... }
+    // We need to sort them first to be sure of order.
+    // If we rely on slot numbers 1..N:
+    const slotOrderMap = new Map();
+    timeslots.forEach(t => {
+        // Create a comparable value: Day index * 100 + slot index
+        // Valid days: Mon, Tue... Mapping needed if day is string.
+        const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        const dayIdx = days.indexOf(t.day);
+        const orderVal = (dayIdx * 100) + (t.slot || 0);
+        slotOrderMap.set(t._id.toString(), { day: t.day, val: orderVal, order: t.slot });
+    });
+
+    const getFacultySlots = (fId) => schedule.filter(e => e.facultyId.toString() === fId.toString());
+
+    // --- 2. GAPS & 4. COMPACTNESS & 2b. DAILY LOAD ---
+    let totalGaps = 0;
+    let totalCompactPairs = 0;
+    let overloadedDays = 0;
+
+    faculties.forEach(f => {
+        const mySlots = getFacultySlots(f._id.toString());
+        // Group by day
+        const byDay = {};
+        mySlots.forEach(s => {
+            if (!byDay[s.day]) byDay[s.day] = [];
+            const meta = slotOrderMap.get(s.timeslotId.toString());
+            if (meta) byDay[s.day].push({ ...s, order: meta.order });
+        });
+
+        Object.keys(byDay).forEach(d => {
+            const dayEntries = byDay[d];
+            dayEntries.sort((a, b) => a.order - b.order);
+
+            // Daily Load Check
+            if (dayEntries.length > 4) overloadedDays++;
+
+            // Gaps & Compactness
+            for (let i = 0; i < dayEntries.length - 1; i++) {
+                const diff = dayEntries[i + 1].order - dayEntries[i].order;
+                if (diff === 1) {
+                    totalCompactPairs++;
+                } else if (diff > 1) {
+                    // Gap found (diff - 1 is number of empty slots)
+                    totalGaps += (diff - 1);
+                }
+            }
+        });
+    });
+
+    // Score Calculations
+    const rawGapPenalty = totalGaps * SCALING.GAP_PENALTY_MULTIPLIER;
+    const weightedGapPenalty = rawGapPenalty * W.GAPS;
+    score -= weightedGapPenalty;
+    details.gapScore = -weightedGapPenalty;
+
+    const rawCompactBonus = totalCompactPairs * SCALING.COMPACTNESS_BONUS_MULTIPLIER;
+    const weightedCompactBonus = rawCompactBonus * W.COMPACTNESS;
+    score += weightedCompactBonus;
+    details.compactnessScore = weightedCompactBonus;
+
+    // Overload Penalty (merged into workload or separate? Let's add to workload score for simplicity or general decay)
+    const overloadPenalty = overloadedDays * SCALING.DAILY_LOAD_PENALTY;
+    score -= overloadPenalty;
+    details.workloadScore -= overloadPenalty; // attributing to workload
+
+    // --- 3. ROOM UTILIZATION ---
     let totalUtilization = 0;
     let count = 0;
     schedule.forEach(entry => {
         const room = rooms.find(r => r._id.toString() === entry.roomId.toString());
         const section = sections.find(s => s._id.toString() === entry.sectionId.toString());
         if (room && section) {
-            const util = section.studentCount / room.capacity;
+            const util = Math.min(section.studentCount / room.capacity, 1.0); // Cap at 100%
             totalUtilization += util;
             count++;
         }
     });
 
     const avgUtil = count > 0 ? totalUtilization / count : 0;
-    const roomBonus = avgUtil * 100; // Max +100 approx
-    score += roomBonus;
-    details.roomEfficiencyBonus = roomBonus;
+    const rawRoomBonus = avgUtil * SCALING.ROOM_BONUS_MULTIPLIER;
+    const weightedRoomScore = rawRoomBonus * W.ROOM_UTIL;
 
-    return { total: score, details };
+    score += weightedRoomScore;
+    details.roomUtilScore = weightedRoomScore;
+
+    // --- 5. PREFERENCES ---
+    // (Placeholder: +10 pts just for existing)
+    const prefScore = 10 * W.PREFERENCES;
+    score += prefScore;
+    details.preferenceScore = prefScore;
+
+    return { total: Math.round(score), details };
 };
 
 
@@ -282,7 +380,7 @@ const generateTimetable = async (sections, sectionCourses, faculties, rooms, tim
         injectConflicts(schedule);
         // ------------------------------------------------
 
-        const scoreResult = calculateScore(schedule, faculties, sections, rooms);
+        const scoreResult = calculateScore(schedule, faculties, sections, rooms, timeslots);
 
         candidates.push({
             id: i + 1,

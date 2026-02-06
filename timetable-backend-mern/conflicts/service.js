@@ -18,95 +18,89 @@ const detectConflicts = async (proposalId) => {
     const query = proposalId ? { proposalId } : {};
 
     // Fetch all timetable entries
-    const entries = await Timetable.find(query).populate('facultyId roomId sectionId timeslotId');
+    // Ensure we populate correctly to get names and details
+    const entries = await Timetable.find(query)
+        .populate('facultyId', 'name')
+        .populate('roomId', 'roomType capacity')
+        .populate('sectionId', 'name')
+        .populate('courseId', 'name courseType')
+        .populate('timeslotId', 'day slot startTime endTime');
 
-    // Simple O(N^2) check or optimized query - relying on optimized query concepts or iteration
-    // Since we need specific reasons, iteration is straightforward for this scale.
-    // For large datasets, we would aggregate.
+    // Maps to group entries by Resource + Timeslot
+    // Key format: `${proposalId}_${resourceId}_${timeslotId}`
+    const facultyMap = new Map();
+    const roomMap = new Map();
+    const sectionMap = new Map();
 
-    for (let i = 0; i < entries.length; i++) {
-        const entryA = entries[i];
+    for (const entry of entries) {
+        // Validation: skip if essential relations are missing (e.g. deleted refs)
+        if (!entry.timeslotId || !entry.facultyId || !entry.roomId || !entry.sectionId) continue;
+        if (!entry.proposalId) continue; // Should have one
 
-        // Skip entries with missing populated fields or missing _id properties
-        if (!entryA.timeslotId || !entryA.timeslotId._id ||
-            !entryA.facultyId || !entryA.facultyId._id ||
-            !entryA.roomId || !entryA.roomId._id ||
-            !entryA.sectionId || !entryA.sectionId._id) {
-            continue;
-        }
+        const tid = entry.timeslotId._id.toString();
+        const pid = entry.proposalId.toString();
 
-        for (let j = i + 1; j < entries.length; j++) {
-            const entryB = entries[j];
+        // 1. Faculty Grouping
+        const fKey = `${pid}_${entry.facultyId._id.toString()}_${tid}`;
+        if (!facultyMap.has(fKey)) facultyMap.set(fKey, []);
+        facultyMap.get(fKey).push(entry);
 
-            // Ensure we only compare entries within the same proposal
-            if (entryA.proposalId != entryB.proposalId) {
-                continue;
-            }
+        // 2. Room Grouping
+        const rKey = `${pid}_${entry.roomId._id.toString()}_${tid}`;
+        if (!roomMap.has(rKey)) roomMap.set(rKey, []);
+        roomMap.get(rKey).push(entry);
 
-            // Skip entries with missing populated fields or missing _id properties
-            if (!entryB.timeslotId || !entryB.timeslotId._id ||
-                !entryB.facultyId || !entryB.facultyId._id ||
-                !entryB.roomId || !entryB.roomId._id ||
-                !entryB.sectionId || !entryB.sectionId._id) {
-                continue;
-            }
-
-            // Must be in the same timeslot to clash
-            // Assuming timeslotId is an object, compare strings
-            if (entryA.timeslotId._id.toString() !== entryB.timeslotId._id.toString()) {
-                continue;
-            }
-
-            // 1. Faculty Clash
-            if (entryA.facultyId._id.toString() === entryB.facultyId._id.toString()) {
-                conflicts.push({
-                    type: 'faculty',
-                    entityId: entryA.facultyId._id,
-                    timeslotId: entryA.timeslotId._id,
-                    reason: `Faculty ${entryA.facultyId.name} is double booked in Room ${entryA.roomId.roomType} and ${entryB.roomId.roomType}`,
-                    proposalId: entryA.proposalId,
-                    details: {
-                        entryA: entryA._id,
-                        entryB: entryB._id
-                    }
-                });
-            }
-
-            // 2. Room Clash
-            if (entryA.roomId._id.toString() === entryB.roomId._id.toString()) {
-                conflicts.push({
-                    type: 'room',
-                    entityId: entryA.roomId._id,
-                    timeslotId: entryA.timeslotId._id,
-                    reason: `Room ${entryA.roomId.roomType} (Capacity: ${entryA.roomId.capacity}) is double booked for ${entryA.courseId} and ${entryB.courseId}`,
-                    proposalId: entryA.proposalId,
-                    details: {
-                        entryA: entryA._id,
-                        entryB: entryB._id
-                    }
-                });
-            }
-
-            // 3. Section Clash
-            if (entryA.sectionId._id.toString() === entryB.sectionId._id.toString()) {
-                conflicts.push({
-                    type: 'section',
-                    entityId: entryA.sectionId._id,
-                    timeslotId: entryA.timeslotId._id,
-                    reason: `Section ${entryA.sectionId.name} has two classes scheduled at the same time: ${entryA.courseId} and ${entryB.courseId}`,
-                    proposalId: entryA.proposalId,
-                    details: {
-                        entryA: entryA._id,
-                        entryB: entryB._id
-                    }
-                });
-            }
-        }
+        // 3. Section Grouping
+        const sKey = `${pid}_${entry.sectionId._id.toString()}_${tid}`;
+        if (!sectionMap.has(sKey)) sectionMap.set(sKey, []);
+        sectionMap.get(sKey).push(entry);
     }
+
+    // Helper to process groups
+    const processGroups = (map, type, getReason) => {
+        for (const [key, group] of map) {
+            if (group.length > 1) {
+                // Conflict Found!
+                const sample = group[0];
+                const entityId = type === 'faculty' ? sample.facultyId._id :
+                    type === 'room' ? sample.roomId._id : sample.sectionId._id;
+
+                // Construct a detailed reason
+                // e.g. "Faculty John Doe has 2 classes: Math (Slot 1), Physics (Slot 1)"
+                // Actually constraint is SAME timeslot, so slot is implied.
+                // "Faculty John Doe has 3 classes at 10:00 AM: Math, Physics, Chem"
+
+                const courseNames = group.map(e => e.courseId ? e.courseId.name : 'Unknown').join(', ');
+                const timeStr = sample.timeslotId.startTime ? `${sample.timeslotId.startTime} - ${sample.timeslotId.endTime}` : `Slot ${sample.timeslotId.slot}`;
+
+                let reason = '';
+                if (type === 'faculty') {
+                    reason = `Faculty ${sample.facultyId.name} is double-booked for ${group.length} classes: ${courseNames}`;
+                } else if (type === 'room') {
+                    reason = `Room ${sample.roomId.roomType} (Cap: ${sample.roomId.capacity}) has ${group.length} classes: ${courseNames}`;
+                } else {
+                    reason = `Section ${sample.sectionId.name} has ${group.length} concurrent classes: ${courseNames}`;
+                }
+
+                conflicts.push({
+                    type: type,
+                    entityId: entityId,
+                    timeslotId: sample.timeslotId._id,
+                    reason: reason,
+                    proposalId: sample.proposalId,
+                    // Optional: store individual entry IDs for debugging
+                    details: { entryIds: group.map(g => g._id) }
+                });
+            }
+        }
+    };
+
+    processGroups(facultyMap, 'faculty');
+    processGroups(roomMap, 'room');
+    processGroups(sectionMap, 'section');
 
     // Save to DB
     if (conflicts.length > 0) {
-        // We only save the main schema fields
         const dbConflicts = conflicts.map(c => ({
             type: c.type,
             entityId: c.entityId,
